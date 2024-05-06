@@ -245,7 +245,7 @@ namespace Maes.ExplorationAlgorithm.Minotaur
                         AttemptAddDoorway(GetWalls(wallPoints.Select(wallPoint => wallPoint.Position).Distinct()));
                     else if (waypoint.Type == Waypoint.WaypointType.NearestDoor)
                     {
-                        var possibleFirstDoorway =  _doorways.FirstOrDefault(doorway => _map.FromSlamMapCoordinate(doorway.Center + doorway.ApproachedDirection.Vector * 4) == waypoint.Destination);
+                        var possibleFirstDoorway = _doorways.FirstOrDefault(doorway => _map.FromSlamMapCoordinate(doorway.Center + doorway.ApproachedDirection.Vector * 4) == waypoint.Destination);
                         if (possibleFirstDoorway != default) possibleFirstDoorway.Explored = true;
                     }
                     _waypoint = null;
@@ -373,7 +373,7 @@ namespace Maes.ExplorationAlgorithm.Minotaur
             var points = slamWallPoints.Select(point => (perp: point + Vector2Int.FloorToInt((VisionRadius - 2) * 2 * Vector2.Perpendicular(point - slamPosition).normalized), point))
                            .Where(tuple => slamMap.IsWithinBounds(tuple.perp)
                                            && slamMap.GetTileStatus(tuple.perp) != SlamTileStatus.Solid
-                                           && !IsPerpendicularThroughDoorway(tuple.perp, doorways))
+                                           && !IsPerpendicularThroughDoorwayOrWall(tuple.perp, doorways.Union(slamWalls)))
                            .ToList();
 
             if (!points.Any())
@@ -411,15 +411,14 @@ namespace Maes.ExplorationAlgorithm.Minotaur
             return false;
         }
 
-        private bool IsPerpendicularThroughDoorway(Vector2Int perp, IEnumerable<Line2D> doorways)
+        private bool IsPerpendicularThroughDoorwayOrWall(Vector2Int perp, IEnumerable<Line2D> percievedWalls)
         {
             var slamMap = _controller.GetSlamMap();
             var slamPosition = slamMap.GetCurrentPosition();
             var path = new Line2D(slamPosition, perp);
-            var doorwayPerpIntersections = doorways.Select(doorway => new List<Line2D> { doorway, path })
-                                                 .SelectMany(intersect => GetIntersectionPoints(slamMap, intersect));
-            var result = doorwayPerpIntersections.Any(doorwayPerpIntersection => doorwayPerpIntersection.walls.All(wall => wall.Rasterize().Select(tile => Vector2Int.FloorToInt(tile)).Contains(doorwayPerpIntersection.intersection)));
-            return result;
+            var doorwayPerpIntersections = percievedWalls.Select(wall => new List<Line2D> { wall, path })
+                                                 .SelectMany(intersect => GetIntersectionPoints(slamMap, intersect, false));
+            return doorwayPerpIntersections.Any();
         }
 
         private bool WallUnseenNeighbor((Vector2Int perp, Vector2Int point) point, List<Line2D> slamWalls)
@@ -498,7 +497,7 @@ namespace Maes.ExplorationAlgorithm.Minotaur
             var test = sortedTiles.Select(tile => (Vector2.SignedAngle(leftAngleVector, tile.corrected - slamPosition) + 360) % 360);
 
 
-            var startPoint = sortedTiles.First(); // Top right is borked
+            var startPoint = sortedTiles.First();
             var previousDirection = (startPoint.corrected - sortedTiles[1].corrected).GetAngleRelativeToX();
 
             var result = new List<Line2D>();
@@ -532,7 +531,7 @@ namespace Maes.ExplorationAlgorithm.Minotaur
             return result;
         }
 
-        private List<(Vector2Int intersection, List<Line2D> walls)> GetIntersectionPoints(IPathFindingMap map, IEnumerable<Line2D> walls)
+        private List<(Vector2Int intersection, List<Line2D> walls)> GetIntersectionPoints(IPathFindingMap map, IEnumerable<Line2D> walls, bool infinite = true)
         {
             List<(Vector2Int intersection, List<Line2D> walls)> intersectionPoints = new();
             foreach (var line in walls)
@@ -540,7 +539,7 @@ namespace Maes.ExplorationAlgorithm.Minotaur
                 var otherlines = walls.Where(tempLine => tempLine != line);
                 foreach (var otherline in otherlines)
                 {
-                    var intersectionPoint = line.GetIntersection(otherline, true);
+                    var intersectionPoint = line.GetIntersection(otherline, infinite);
                     if (intersectionPoint.HasValue)
                     {
                         intersectionPoints.Add((Vector2Int.FloorToInt(intersectionPoint.Value), new List<Line2D> { line, otherline }));
@@ -580,6 +579,12 @@ namespace Maes.ExplorationAlgorithm.Minotaur
 
         private bool MoveToNearestEdge()
         {
+            var slamMap = _controller.GetSlamMap();
+            var slamPosition = slamMap.GetCurrentPosition();
+            var slamTiles = _edgeDetector.GetTilesAroundRobot(VisionRadius + 2, new List<SlamTileStatus> { SlamTileStatus.Solid, SlamTileStatus.Unseen }, slamPrecision: true)
+                                     .Where(tile => slamMap.GetTileStatus(tile) == SlamTileStatus.Solid)
+                                     .ToList();
+            var slamWalls = GetWalls(slamTiles);
             var doorways = DoorwaysInRange(VisionRadius * 2).Select(doorway => doorway.Opening);
             var tiles = _edgeDetector.GetBoxAroundRobot()
                               .Where(tile => (_map.GetTileStatus(tile) != SlamTileStatus.Unseen)
@@ -587,7 +592,7 @@ namespace Maes.ExplorationAlgorithm.Minotaur
                               .Select(tile => (status: _map.GetTileStatus(tile), perpendicularTile: tile + CardinalDirection.PerpendicularDirection(tile - _position).Vector * (VisionRadius - 1)))
                               .Where(tile => _map.IsWithinBounds(tile.perpendicularTile)
                                              && IfSolidIsPathable(tile)
-                                             && !IsPerpendicularThroughDoorway(tile.perpendicularTile, doorways))
+                                             && !IsPerpendicularThroughDoorwayOrWall(_map.ToSlamMapCoordinate(tile.perpendicularTile), doorways.Union(slamWalls)))
                               .Select(tile => tile.perpendicularTile);
             if (tiles.Any())
             {
@@ -635,10 +640,10 @@ namespace Maes.ExplorationAlgorithm.Minotaur
             var startCoordinate = _position;
             if (_map.GetTileStatus(startCoordinate) == SlamTileStatus.Solid)
             {
-                var NearestOpenTile = _map.GetNearestTileFloodFill(startCoordinate, SlamTileStatus.Open, doorTiles);
-                if (NearestOpenTile.HasValue)
+                var nearestOpenTile = _map.GetNearestTileFloodFill(startCoordinate, SlamTileStatus.Open, doorTiles);
+                if (nearestOpenTile.HasValue)
                 {
-                    startCoordinate = NearestOpenTile.Value;
+                    startCoordinate = nearestOpenTile.Value;
                 }
             }
             var tile = _map.GetNearestTileFloodFill(startCoordinate, SlamTileStatus.Unseen, doorTiles);
@@ -832,31 +837,6 @@ namespace Maes.ExplorationAlgorithm.Minotaur
         {
             return walls.Select(wall => Vector2Int.FloorToInt(wall.Rasterize().OrderBy(tile => Vector2.Distance(tile, queryPoint)).First()));
         }
-
-        private void Communication()
-        {
-            var messages = _controller.ReceiveBroadcast().OfType<IMinotaurMessage>();
-            var minotaurMessages = new List<IMinotaurMessage>();
-            foreach (var message in messages)
-            {
-                var combined = false;
-                foreach (var minotaurMessage in minotaurMessages)
-                {
-                    var combinedMessage = minotaurMessage.Combine(message, this);
-                    if (combinedMessage != null)
-                    {
-                        minotaurMessages[minotaurMessages.IndexOf(message)] = combinedMessage;
-                        combined = true;
-                        break;
-                    }
-                }
-                if (!combined)
-                {
-                    minotaurMessages.Add(message);
-                }
-            }
-        }
-
 
         private Doorway? GetNearestUnexploredDoorway()
         {

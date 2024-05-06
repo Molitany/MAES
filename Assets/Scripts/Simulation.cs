@@ -188,9 +188,9 @@ namespace Maes
             SingletonInstance = this;
         }
 
-        public Vector2 WorldCoordinateToSlamPosition(Vector2 worldPosition)
+        public Vector2 WorldCoordinateToCoarsePosition(Vector2 worldPosition)
         {
-            return worldPosition;
+            return worldPosition - _collisionMap.ScaledOffset;
         }
 
         private void OnDrawGizmos()

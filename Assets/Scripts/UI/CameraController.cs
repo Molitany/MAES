@@ -274,8 +274,8 @@ namespace Maes.UI
             }
             else if (SimulationManager.CurrentSimulation != null)
             {
-                // var coord = SimulationManager.CurrentSimulation.WorldCoordinateToSlamCoordinate(mouseWorldPosition);
-                SimulationManager.simulationInfoUIController.UpdateMouseCoordinates(mouseWorldPosition!);
+                var coarseCoordinates = SimulationManager.CurrentSimulation.WorldCoordinateToCoarsePosition(mouseWorldPosition);
+                SimulationManager.simulationInfoUIController.UpdateMouseCoordinates(coarseCoordinates);
             }
         }
 
