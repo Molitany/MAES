@@ -646,6 +646,7 @@ namespace Maes.ExplorationAlgorithm.Minotaur
                     startCoordinate = nearestOpenTile.Value;
                 }
             }
+
             var tile = _map.GetNearestTileFloodFill(startCoordinate, SlamTileStatus.Unseen, doorTiles);
             if (tile.HasValue)
             {
